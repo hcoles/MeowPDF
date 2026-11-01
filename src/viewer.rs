@@ -457,7 +457,7 @@ impl Viewer {
             return;
         }
 
-        if self.invalidated.contains_key(&page) {
+        if self.images.contains_key(&page) {
             remove_image!(page);
         }
 
@@ -484,15 +484,27 @@ impl Viewer {
         preload: bool,
         renderer: &Renderer,
     ) -> Option<usize> {
-        if (!self.images.contains_key(&page) || self.invalidated.contains_key(&page))
+        let render_scale =
+            self.scale * CONFIG.get().unwrap().viewer.render_precision as f32;
+        let stale = self.images.get(&page).is_some_and(|image| {
+            let current = image.read().unwrap().render_scale();
+            (current - render_scale).abs() > 0.1 * render_scale
+        });
+
+        if (!self.images.contains_key(&page)
+            || self.invalidated.contains_key(&page)
+            || stale)
             && !self.scheduled4render.contains_key(&page)
         {
-            let res = renderer.send_action(RendererAction::Display(page));
+            let res = renderer.send_action(RendererAction::Display(page, render_scale));
             if res.is_ok() {
                 self.scheduled4render.insert(page, ());
             }
 
-            return None;
+            /* A stale image is still displayed until the sharper one arrives */
+            if !stale || self.invalidated.contains_key(&page) {
+                return None;
+            }
         }
 
         if self.images.contains_key(&page) {

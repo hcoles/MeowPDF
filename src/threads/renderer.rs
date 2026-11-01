@@ -17,7 +17,7 @@ use crate::{
 #[derive(Copy, Clone, PartialEq)]
 pub enum RendererAction {
     Load,
-    Display(usize),
+    Display(usize, f32),
     ToggleInverse,
     ToggleAlpha,
 }
@@ -48,7 +48,7 @@ struct RendererInnerState<'a> {
     pub inverse: bool,
 
     pub cs: Colorspace,
-    pub ctm: Matrix,
+    pub scale_max_bytes: usize,
 }
 
 impl<'a> RendererInnerState<'a> {
@@ -65,13 +65,27 @@ impl<'a> RendererInnerState<'a> {
             alpha: false,
             inverse: false,
             cs: Colorspace::device_rgb(),
-            ctm: Matrix::new_scale(
-                config.viewer.render_precision as f32,
-                config.viewer.render_precision as f32,
-            ),
+            scale_max_bytes: config.viewer.memory_limit / 4,
         };
 
         Ok(inner_state)
+    }
+
+    /* Limits the scale so that a single bitmap can not exceed a fraction of the
+     * memory limit */
+    fn clamp_scale(&self, page: usize, scale: f32) -> f32 {
+        let area = self
+            .cache
+            .get(page)
+            .and_then(|p| p.bounds().ok())
+            .map(|b| b.width() * b.height())
+            .unwrap_or(0.0f32);
+        if area <= 0.0f32 {
+            return scale;
+        }
+
+        let max_scale = (self.scale_max_bytes as f32 / (4.0f32 * area)).sqrt();
+        f32::max(f32::min(scale, max_scale), 0.1f32)
     }
 
     pub fn load(&mut self) -> Result<RendererResult, String> {
@@ -185,7 +199,7 @@ impl Renderer {
                     .map_err(|x| format!("Could not receive from client: {}", x))?;
 
                 match action {
-                    RendererAction::Display(_) => (),
+                    RendererAction::Display(..) => (),
                     _ => {
                         general_server_sender.try_send(action).map_err(|x| {
                             format!("Could not send action to client: {}", x)
@@ -217,7 +231,7 @@ impl Renderer {
                         // Clear the scheduled pages for rendering
                         priority_server_receiver.clear_priority(1);
                     }
-                    RendererAction::Display(page) => {
+                    RendererAction::Display(page, scale) => {
                         if state.cache.get(page).is_none() {
                             // Sending `None` as data signals that it should be
                             // removed from the registry
@@ -233,8 +247,10 @@ impl Renderer {
                         }
 
                         /* Load the image */
+                        let render_scale = state.clamp_scale(page, scale);
+                        let ctm = Matrix::new_scale(render_scale, render_scale);
                         let data = state.cache[page].to_pixmap(
-                            &state.ctm,
+                            &ctm,
                             &state.cs,
                             state.alpha,
                             false,
@@ -254,7 +270,7 @@ impl Renderer {
                             }
                         }
 
-                        let res = Image::new(&data_unwrapped);
+                        let res = Image::new(&data_unwrapped, scale);
                         if res.is_err() {
                             continue;
                         }
@@ -295,7 +311,7 @@ impl Renderer {
             | RendererAction::ToggleInverse => {
                 Err("Cannot wait for Load, Alpha and Inverse".to_string())?
             }
-            RendererAction::Display(_) => self
+            RendererAction::Display(..) => self
                 .priority_client_sender
                 .try_send_priority(action, 0)
                 .map_err(|x| format!("Could not send action to renderer: {}", x))?,
@@ -314,7 +330,7 @@ impl Renderer {
                 .priority_client_sender
                 .try_send_priority(action, 0)
                 .map_err(|x| format!("Could not send action to renderer: {}", x))?,
-            RendererAction::Display(_) => Err("Cannot wait for display".to_string())?,
+            RendererAction::Display(..) => Err("Cannot wait for display".to_string())?,
         }
 
         let result = self

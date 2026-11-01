@@ -1,8 +1,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::{
-    drivers::graphics::*, viewer::DisplayRect, CONFIG, IMAGE_PADDING, TERMINAL_SIZE,
-};
+use crate::{drivers::graphics::*, viewer::DisplayRect, IMAGE_PADDING, TERMINAL_SIZE};
 
 use mupdf::Pixmap;
 
@@ -10,11 +8,13 @@ pub struct Image {
     id: usize,
     /* Stores the dimension of the zoomed in bitmap WITHOUT padding */
     dimensions: (i32, i32),
+    /* The scale that the renderer was asked to render this image at */
+    render_scale: f32,
     data: Vec<u8>,
 }
 
 impl Image {
-    pub fn new(pixmap: &Pixmap) -> Result<Self, String> {
+    pub fn new(pixmap: &Pixmap, render_scale: f32) -> Result<Self, String> {
         static ID: AtomicUsize = AtomicUsize::new(1);
 
         const PADDING_CLR: u8 = 0u8;
@@ -59,12 +59,17 @@ impl Image {
         let image = Self {
             id: ID.load(Ordering::Acquire),
             dimensions: (pixmap.width() as i32, pixmap.height() as i32),
+            render_scale,
             data,
         };
 
         ID.store(ID.load(Ordering::Acquire) + 1, Ordering::Release);
         image.transfer()?;
         Ok(image)
+    }
+
+    pub fn render_scale(&self) -> f32 {
+        self.render_scale
     }
 
     #[allow(dead_code)]
@@ -89,12 +94,12 @@ impl Image {
         /* `true` indicates that the image was actually displayed and was not
          * tried to be displayed outside of the viewpoint */
 
-        let config = CONFIG.get().unwrap();
         let padding = *IMAGE_PADDING.get().unwrap();
-        let render_precision = config.viewer.render_precision;
 
-        let scale = rect.height as f64 / (self.dimensions.1 as f64 / render_precision);
-        let render_precision_norm = render_precision / scale;
+        /* Bitmap pixels per displayed pixel; depends on the scale the image was
+         * rendered at, which can differ from the current viewer scale */
+        let render_precision_norm =
+            self.dimensions.1 as f64 / f64::max(rect.height as f64, 1.0);
 
         let (pxpercol, pxperrow);
         let (col0, col1, row0, row1);
