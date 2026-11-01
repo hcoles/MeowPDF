@@ -1,6 +1,6 @@
 use core::f32;
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     io,
     sync::{Arc, RwLock},
 };
@@ -122,7 +122,6 @@ pub struct Viewer {
     invalidated: HashMap<usize, ()>,
     scheduled4render: HashMap<usize, ()>,
     memory_used: usize,
-    last_rendered: VecDeque<usize>,
 
     sender_rerender: Sender<()>,
 }
@@ -144,7 +143,6 @@ impl Viewer {
                 invalidated: HashMap::new(),
                 scheduled4render: HashMap::new(),
                 memory_used: 0,
-                last_rendered: VecDeque::new(),
                 sender_rerender,
             },
             receiver_rerender,
@@ -187,6 +185,10 @@ impl Viewer {
     }
 
     pub fn jump(&mut self, page: usize) -> Result<(), String> {
+        if self.cumulative_heights.is_empty() {
+            return Err("The document has no pages".to_owned());
+        }
+
         let res = if page >= self.cumulative_heights.len() {
             Err("Given page number is larger than the number of pages".to_owned())
         } else {
@@ -478,18 +480,55 @@ impl Viewer {
 
         let image_unwrapped = image.unwrap();
         self.memory_used += image_unwrapped.read().unwrap().size();
-        self.last_rendered.push_back(page);
-
         self.images.insert(page, image_unwrapped);
         self.scheduled4render.remove(&page);
 
+        /* Evict the pages farthest from the view first. Pages that are displayed or
+         * preloaded are never evicted: `preload_each` guarantees that they fit into
+         * the memory limit, so they can not evict each other and be rendered again
+         * forever. */
+        let (first, last) = self.wanted_pages();
         while self.memory_used >= config.viewer.memory_limit {
-            let page2remove = self.last_rendered.pop_front().unwrap();
-            if !self.images.contains_key(&page2remove) {
-                continue;
-            }
+            let farthest = self
+                .images
+                .keys()
+                .filter(|p| **p < first || **p > last)
+                .max_by_key(|p| if **p < first { first - **p } else { **p - last })
+                .copied();
+
+            let Some(page2remove) = farthest else {
+                break;
+            };
             remove_image!(page2remove);
         }
+    }
+
+    /* The number of pages preloaded on each side of the displayed pages. Large
+     * pages leave room for fewer of them in the memory limit. */
+    fn preload_each(&self) -> usize {
+        let configured = CONFIG.get().unwrap().viewer.pages_preloaded;
+        let largest = self
+            .images
+            .values()
+            .map(|image| image.read().unwrap().size())
+            .max()
+            .unwrap_or(0);
+        if largest == 0 {
+            return configured;
+        }
+
+        let capacity = CONFIG.get().unwrap().viewer.memory_limit / largest;
+        let visible = self.calculate_display_bounds().len();
+        usize::min(configured, capacity.saturating_sub(visible) / 2)
+    }
+
+    /* The first and last page that are displayed or preloaded */
+    fn wanted_pages(&self) -> (usize, usize) {
+        let preload = self.preload_each();
+        let visible = self.calculate_display_bounds().len();
+        let first = self.page_first().saturating_sub(preload);
+        let last = self.page_first() + visible.saturating_sub(1) + preload;
+        (first, last)
     }
 
     fn load_or_display(
@@ -542,8 +581,7 @@ impl Viewer {
     /* Displays the pages based on the internal state of the offset.
      * Calculates how many pages should be rendered based on the terminal size */
     pub fn display_pages(&mut self, renderer: &Renderer) -> Result<Vec<usize>, String> {
-        let config = CONFIG.get().unwrap();
-        let preloaded = config.viewer.pages_preloaded;
+        let preloaded = self.preload_each();
 
         /* Track what images have been actually displayed on the screen to
          * later check if there occured errors during the display */
@@ -589,9 +627,19 @@ impl Viewer {
         Ok(displayed)
     }
 
-    pub fn schedule_transfer(&mut self, page: usize) {
-        let image = self.images[&page].clone();
-        let _ = image.read().unwrap().transfer();
-        let _ = self.sender_rerender.send(());
+    /* The terminal no longer knows the image with the given ID. Render the page again
+     * so that it is transmitted under a fresh ID instead of resending the old one
+     * in a loop that could fail silently. */
+    pub fn invalidate_image(&mut self, id: usize) {
+        let page = self
+            .images
+            .iter()
+            .find(|(_, image)| image.read().unwrap().id() == id)
+            .map(|(page, _)| *page);
+
+        if let Some(page) = page {
+            self.invalidated.insert(page, ());
+            let _ = self.sender_rerender.send(());
+        }
     }
 }

@@ -109,6 +109,7 @@ The default keybindings are listed bellow:
 - **l/\<right\>**: Move the document right
 - **Ctrl+b/\<PageUp\>**: Jumps to the previous page
 - **Ctrl+f/\<PageDown\>**: Jumps to the next page
+- **/**: Open the table of contents (j/k or arrows to move, Enter to jump, Esc or / to close)
 - **+**: Zoom in
 - **-**: Zoom out
 
@@ -124,6 +125,9 @@ The keybindings can be customized by modifying the `[bindings]` section in the c
 - `ZoomOut`: Zooms out the viewer.
 - `JumpFirstPage`: Jumps to the first page of the document.
 - `JumpLastPage`: Jumps to the last page of the document.
+- `PrevPage`: Jumps to the previous page.
+- `NextPage`: Jumps to the next page.
+- `ToggleToc`: Opens the table of contents of the document.
 - `Quit`: Quits the document.
 
 > [!WARNING]

@@ -19,6 +19,9 @@ use threads::event::InputEvent;
 mod image;
 use crate::image::*;
 
+mod toc;
+use crate::toc::*;
+
 mod viewer;
 use crate::viewer::*;
 
@@ -150,7 +153,11 @@ fn main() {
         modifiers: KeyModifiers::NONE,
     };
 
+    let mut toc = Toc::new();
+
     'main: loop {
+        let toc_was_open = toc.open;
+
         /* sel[0..1] are the results from the renderer thread */
         let mut sel = result_receiver.construct_biased_select();
         sel.recv(&file_reload);
@@ -163,6 +170,12 @@ fn main() {
         sel.recv(&event_inputs.3);
 
         let index_ready = sel.ready();
+
+        /* Mouse movement must not trigger a redraw of the table of contents */
+        if toc.open && index_ready == 5 {
+            current_mouse = event_inputs.1.try_recv().expect("Could not receive mouse");
+            continue;
+        }
 
         execute!(io::stdout(), ClearImages, Clear(ClearType::FromCursorDown))
             .expect("Could not clear images");
@@ -179,6 +192,7 @@ fn main() {
                         cumulative_heights,
                         widths,
                         links,
+                        toc: toc_entries,
                     } => {
                         let uninit = viewer.is_uninit();
 
@@ -188,6 +202,7 @@ fn main() {
                             &widths,
                             &links,
                         );
+                        toc.set_entries(toc_entries);
                         viewer.invalidate_registry();
                         viewer.center_viewer();
                         if uninit {
@@ -218,6 +233,11 @@ fn main() {
             4 => {
                 let input = event_inputs.0.try_recv().expect("Could not receive input");
                 match input {
+                    InputEvent::Key(key) if toc.open => {
+                        if let Some(page) = toc.handle_key(key) {
+                            let _ = viewer.jump(page);
+                        }
+                    }
                     InputEvent::Key(key) => {
                         if handle_key(
                             key,
@@ -225,6 +245,7 @@ fn main() {
                             &mut viewer,
                             &renderer,
                             &mut throttle_data,
+                            &mut toc,
                         ) {
                             break 'main;
                         }
@@ -272,6 +293,13 @@ fn main() {
             _ => unreachable!(),
         };
 
+        if toc.open {
+            toc.draw();
+            continue;
+        } else if toc_was_open {
+            Toc::erase();
+        }
+
         if let Some(link) = viewer.intersect_link(current_mouse) {
             execute!(io::stdout(), SetPointerShape(PointerShape::Pointer))
                 .expect("Could not set pointer shape");
@@ -301,19 +329,26 @@ fn main() {
         }
 
         let gr = RECEIVER_GR.get().unwrap().lock().unwrap();
+        /* Responses that arrived late belong to earlier placements */
+        while gr.try_recv().is_ok() {}
+
         let displayed = viewer
             .display_pages(&renderer)
             .expect("Could not display pages");
-        for page in displayed {
+        for _ in displayed {
             /* Never block forever on a missing response from the terminal */
-            let Ok(res) = gr.recv_timeout(Duration::from_millis(500)) else {
+            let Ok(mut res) = gr.recv_timeout(Duration::from_millis(500)) else {
                 break;
             };
-            if res.payload().contains("OK") {
-                continue;
-            }
 
-            viewer.schedule_transfer(page);
+            /* Only an image that the terminal has dropped (e.g. after the screen
+             * was cleared) is worth rendering again; doing so on any other failure
+             * would loop forever */
+            if res.payload().starts_with("ENOENT") {
+                if let Some(id) = res.control().get("i").and_then(|i| i.parse().ok()) {
+                    viewer.invalidate_image(id);
+                }
+            }
         }
     }
 
@@ -363,6 +398,7 @@ fn handle_key(
     viewer: &mut Viewer,
     renderer: &threads::renderer::Renderer,
     throttle_data: &mut LastExecuted,
+    toc: &mut Toc,
 ) -> bool {
     let config = CONFIG.get().unwrap();
 
@@ -417,6 +453,10 @@ fn handle_key(
         ConfigAction::JumpLastPage => {
             let last_page = viewer.pages() - 1;
             let _ = viewer.jump(last_page);
+            false
+        }
+        ConfigAction::ToggleToc => {
+            toc.open = true;
             false
         }
         ConfigAction::Quit => true,

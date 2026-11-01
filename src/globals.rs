@@ -66,6 +66,7 @@ width = 0.2
 "PageDown" = "NextPage"
 "Ctrl+b" = "PrevPage"
 "Ctrl+f" = "NextPage"
+"/" = "ToggleToc"
 "q" = "Quit"
 "Q" = "Quit"
 "#;

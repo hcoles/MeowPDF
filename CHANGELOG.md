@@ -1,3 +1,9 @@
+## [Unreleased]
+
+### Added
+
+- Navigable table of contents overlay, opened with `/` (`ToggleToc` action).
+
 ## [1.2.2] - 2026-01-13
 
 ### Added

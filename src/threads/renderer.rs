@@ -5,7 +5,7 @@ use std::{
 };
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
-use mupdf::{Colorspace, Document, Link, Matrix, Page};
+use mupdf::{Colorspace, Document, Link, Matrix, Outline, Page};
 
 use crate::{
     config::Config,
@@ -22,6 +22,46 @@ pub enum RendererAction {
     ToggleAlpha,
 }
 
+#[derive(Clone, Debug)]
+pub struct TocEntry {
+    pub title: String,
+    pub depth: usize,
+    pub page: Option<usize>,
+}
+
+fn flatten_outlines(outlines: &[Outline], depth: usize, out: &mut Vec<TocEntry>) {
+    for outline in outlines {
+        out.push(TocEntry {
+            title: outline.title.trim().to_owned(),
+            depth,
+            page: outline
+                .dest
+                .as_ref()
+                .map(|d| d.loc.page_number)
+                .filter(|p| *p != u32::MAX)
+                .map(|p| p as usize),
+        });
+        flatten_outlines(&outline.down, depth + 1, out);
+    }
+}
+
+/* `Document::outlines` unwraps destination resolution and panics on malformed
+ * outlines. A broken outline must not kill the renderer thread, so the panic is
+ * contained here with the global (terminal restoring) hook suspended. */
+fn load_toc(document: &Document) -> Vec<TocEntry> {
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let outlines =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| document.outlines()));
+    std::panic::set_hook(hook);
+
+    let mut toc = Vec::new();
+    if let Ok(Ok(outlines)) = outlines {
+        flatten_outlines(&outlines, 0, &mut toc);
+    }
+    toc
+}
+
 #[derive(Clone)]
 pub enum RendererResult {
     PageMetadata {
@@ -29,6 +69,7 @@ pub enum RendererResult {
         cumulative_heights: Vec<f32>,
         widths: Vec<f32>,
         links: Vec<Vec<Link>>,
+        toc: Vec<TocEntry>,
     },
     Image {
         page: usize,
@@ -130,11 +171,17 @@ impl<'a> RendererInnerState<'a> {
             self.cache.push(page);
         }
 
+        let mut toc = load_toc(&self.document);
+        toc.iter_mut()
+            .filter(|e| e.page.is_some_and(|p| p >= page_count as usize))
+            .for_each(|e| e.page = None);
+
         Ok(RendererResult::PageMetadata {
             max_page_width,
             cumulative_heights,
             widths,
             links,
+            toc,
         })
     }
 }
