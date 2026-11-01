@@ -246,13 +246,26 @@ fn main() {
                     .try_recv()
                     .expect("Could not receive from win-size");
 
-                let mut handle = TERMINAL_SIZE
-                    .get()
-                    .unwrap()
-                    .write()
-                    .expect("Could not get win sie handle");
-                handle.width = width;
-                handle.height = height;
+                {
+                    let mut handle = TERMINAL_SIZE
+                        .get()
+                        .unwrap()
+                        .write()
+                        .expect("Could not get win sie handle");
+                    handle.width = width;
+                    handle.height = height;
+
+                    /* Rows and columns are needed to calculate the pixel size of
+                     * a cell and must be kept in sync with the pixel size */
+                    if let Ok(size) = window_size() {
+                        handle.rows = size.rows;
+                        handle.columns = size.columns;
+                        handle.width = size.width;
+                        handle.height = size.height;
+                    }
+                }
+
+                viewer.bound_viewer();
             }
             _ => unreachable!(),
         };
@@ -290,7 +303,10 @@ fn main() {
             .display_pages(&renderer)
             .expect("Could not display pages");
         for page in displayed {
-            let res = gr.recv().unwrap();
+            /* Never block forever on a missing response from the terminal */
+            let Ok(res) = gr.recv_timeout(Duration::from_millis(500)) else {
+                break;
+            };
             if res.payload().contains("OK") {
                 continue;
             }

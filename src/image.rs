@@ -13,6 +13,14 @@ pub struct Image {
     data: Vec<u8>,
 }
 
+impl Drop for Image {
+    fn drop(&mut self) {
+        /* Free the bitmap in the terminal, otherwise replaced images pile up
+         * until the terminal starts evicting images that are still in use */
+        let _ = terminal_graphics_deallocate_id(self.id);
+    }
+}
+
 impl Image {
     pub fn new(pixmap: &Pixmap, render_scale: f32) -> Result<Self, String> {
         static ID: AtomicUsize = AtomicUsize::new(1);

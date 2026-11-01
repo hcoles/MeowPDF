@@ -67,7 +67,15 @@ pub fn terminal_graphics_transfer_bitmap(
     /* Wait for the file to get automatically get deleted by Kitty from a previous
      * render instance of this exact image with the same ID. If this is not done
      * this will lead to extreme bugs where the Kitty terminal can crash */
-    while tmp_file_path.as_path().exists() {}
+    let wait_start = std::time::Instant::now();
+    while tmp_file_path.as_path().exists() {
+        if wait_start.elapsed() > Duration::from_secs(2) {
+            /* The terminal never consumed the file; do not hang forever */
+            let _ = std::fs::remove_file(tmp_file_path.as_path());
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
 
     {
         let mut tmp_file = File::create(tmp_file_path.as_path()).unwrap();
