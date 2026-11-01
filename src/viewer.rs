@@ -289,6 +289,21 @@ impl Viewer {
         self.bound_viewer();
     }
 
+    /* Keeps the zoom relative to the window width when the window is resized */
+    pub fn resize(&mut self, old_width: u16) {
+        let new_width = TERMINAL_SIZE.get().unwrap().read().unwrap().width;
+        if old_width > 0 && new_width > 0 && old_width != new_width {
+            let factor = new_width as f32 / old_width as f32;
+            self.scale *= factor;
+            self.offset.0 *= factor;
+        }
+
+        self.bound_viewer();
+        if self.max_width * self.scale < new_width as f32 {
+            self.center_viewer();
+        }
+    }
+
     pub fn center_viewer(&mut self) {
         let terminal_size_lock = TERMINAL_SIZE.get().unwrap().read().unwrap();
 

@@ -246,12 +246,14 @@ fn main() {
                     .try_recv()
                     .expect("Could not receive from win-size");
 
+                let old_width;
                 {
                     let mut handle = TERMINAL_SIZE
                         .get()
                         .unwrap()
                         .write()
                         .expect("Could not get win sie handle");
+                    old_width = handle.width;
                     handle.width = width;
                     handle.height = height;
 
@@ -265,7 +267,7 @@ fn main() {
                     }
                 }
 
-                viewer.bound_viewer();
+                viewer.resize(old_width);
             }
             _ => unreachable!(),
         };
