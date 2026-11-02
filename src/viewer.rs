@@ -122,6 +122,7 @@ pub struct Viewer {
     invalidated: HashMap<usize, ()>,
     scheduled4render: HashMap<usize, ()>,
     memory_used: usize,
+    manual_move: bool,
 
     sender_rerender: Sender<()>,
 }
@@ -143,6 +144,7 @@ impl Viewer {
                 invalidated: HashMap::new(),
                 scheduled4render: HashMap::new(),
                 memory_used: 0,
+                manual_move: false,
                 sender_rerender,
             },
             receiver_rerender,
@@ -175,6 +177,7 @@ impl Viewer {
     }
 
     pub fn scroll(&mut self, amount: (f32, f32)) {
+        self.manual_move = true;
         self.offset.0 += amount.0;
         self.offset.1 += amount.1;
         self.bound_viewer();
@@ -185,6 +188,7 @@ impl Viewer {
     }
 
     pub fn jump(&mut self, page: usize) -> Result<(), String> {
+        self.manual_move = true;
         if self.cumulative_heights.is_empty() {
             return Err("The document has no pages".to_owned());
         }
@@ -205,6 +209,30 @@ impl Viewer {
         self.bound_viewer();
 
         res
+    }
+
+    /* Whether the user moved the view since the last call */
+    pub fn take_manual_move(&mut self) -> bool {
+        std::mem::take(&mut self.manual_move)
+    }
+
+    /* Scrolls so that the region, given in PDF user space (origin bottom left),
+     * is about a third of the way down the terminal */
+    pub fn scroll_to_region(&mut self, page: usize, y: f32, height: f32) {
+        let Ok(page_height) = self.page_height(page) else {
+            return;
+        };
+        let page_height = page_height - CONFIG.get().unwrap().viewer.margin_bottom;
+        let page_top = if page == 0 {
+            0.0f32
+        } else {
+            self.cumulative_heights[page - 1]
+        };
+
+        let view_height = TERMINAL_SIZE.get().unwrap().read().unwrap().height as f32;
+        self.offset.1 =
+            page_top + (page_height - (y + height)) - view_height / self.scale / 3.0;
+        self.bound_viewer();
     }
 
     pub fn scale(&mut self, scale: f32) {

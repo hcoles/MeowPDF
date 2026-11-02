@@ -5,7 +5,10 @@ use std::sync::{atomic::AtomicBool, Mutex, OnceLock, RwLock};
 
 pub const HELP_MSG: &str = r#"meowpdf kitty terminal document viewer
 
-Usage: meowpdf <file>
+Usage: meowpdf <file> [--sync <file.sync.json>]
+
+The audio sync file defaults to <file> with the extension replaced by .sync.json
+if it exists. The viewer follows the audio player over the unix socket named by it.
 
 Global options:
 -h, --help          Print this usage information.
@@ -67,6 +70,7 @@ width = 0.2
 "Ctrl+b" = "PrevPage"
 "Ctrl+f" = "NextPage"
 "/" = "ToggleToc"
+"f" = "ToggleFollow"
 "q" = "Quit"
 "Q" = "Quit"
 "#;

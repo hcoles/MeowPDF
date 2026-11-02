@@ -56,6 +56,7 @@ pub enum ConfigAction {
     PrevPage,
     NextPage,
     ToggleToc,
+    ToggleFollow,
     Quit,
 }
 

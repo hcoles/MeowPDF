@@ -34,12 +34,63 @@ use crate::config::*;
 use std::hash::RandomState;
 use std::hash::{BuildHasher, Hasher};
 use std::io;
+use std::path::Path;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::RwLock;
 use std::time::{Duration, SystemTime};
+use threads::audiosync::{SyncData, SyncUpdate};
 
 /* Tracks the last executed times of signals for throattling */
+/* State of following an audio player */
+struct Follow {
+    data: Option<Arc<SyncData>>,
+    enabled: bool,
+    cue: Option<usize>,
+}
+
+impl Follow {
+    fn apply(&self, viewer: &mut Viewer) {
+        let region = self
+            .data
+            .as_ref()
+            .zip(self.cue)
+            .and_then(|(d, c)| d.cues[c].regions.first());
+        if let Some(r) = region {
+            if r.page >= 1 {
+                viewer.scroll_to_region(r.page - 1, r.y, r.height);
+            }
+        }
+    }
+}
+
+/* Finds the sync file from the arguments or next to the PDF */
+fn load_sync(pdf: &str) -> Result<Option<Arc<SyncData>>, String> {
+    let args: Vec<String> = std::env::args().skip(2).collect();
+    let explicit = match args.iter().position(|a| a == "--sync") {
+        Some(i) => Some(args.get(i + 1).ok_or("--sync requires a path")?.to_owned()),
+        None => None,
+    };
+
+    let path = match &explicit {
+        Some(p) => Path::new(p).to_owned(),
+        None => {
+            let p = Path::new(pdf).with_extension("sync.json");
+            if !p.is_file() {
+                return Ok(None);
+            }
+            p
+        }
+    };
+
+    match SyncData::load(&path)? {
+        Some(data) => Ok(Some(Arc::new(data))),
+        None if explicit.is_some() => Err("Unknown audio sync file version".to_owned()),
+        None => Ok(None),
+    }
+}
+
 struct LastExecuted {
     pub load: SystemTime,
     pub alpha: SystemTime,
@@ -60,6 +111,14 @@ fn main() {
         }
         _ => (),
     }
+
+    let sync = match load_sync(&arg) {
+        Ok(sync) => sync,
+        Err(e) => {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        }
+    };
 
     /* ============================= Uncook the terminal ============================= */
     enable_raw_mode().expect("Could not cook the terminal");
@@ -155,6 +214,16 @@ fn main() {
 
     let mut toc = Toc::new();
 
+    let sync_updates = match &sync {
+        Some(data) => threads::audiosync::spawn(data.clone()),
+        None => crossbeam_channel::never(),
+    };
+    let mut follow = Follow {
+        data: sync,
+        enabled: true,
+        cue: None,
+    };
+
     'main: loop {
         let toc_was_open = toc.open;
 
@@ -168,6 +237,8 @@ fn main() {
         sel.recv(&event_inputs.1);
         /* Window size change input */
         sel.recv(&event_inputs.3);
+        /* Audio position updates */
+        sel.recv(&sync_updates);
 
         let index_ready = sel.ready();
 
@@ -246,6 +317,7 @@ fn main() {
                             &renderer,
                             &mut throttle_data,
                             &mut toc,
+                            &mut follow,
                         ) {
                             break 'main;
                         }
@@ -290,8 +362,25 @@ fn main() {
 
                 viewer.resize(old_width);
             }
+            7 => {
+                let SyncUpdate { cue, resume } = sync_updates
+                    .try_recv()
+                    .expect("Could not receive audio sync update");
+                follow.cue = Some(cue);
+                if resume {
+                    follow.enabled = true;
+                }
+                if follow.enabled {
+                    follow.apply(&mut viewer);
+                }
+            }
             _ => unreachable!(),
         };
+
+        /* The user took over the view. Index 7 never sets this flag. */
+        if viewer.take_manual_move() {
+            follow.enabled = false;
+        }
 
         if toc.open {
             toc.draw();
@@ -399,6 +488,7 @@ fn handle_key(
     renderer: &threads::renderer::Renderer,
     throttle_data: &mut LastExecuted,
     toc: &mut Toc,
+    follow: &mut Follow,
 ) -> bool {
     let config = CONFIG.get().unwrap();
 
@@ -457,6 +547,13 @@ fn handle_key(
         }
         ConfigAction::ToggleToc => {
             toc.open = true;
+            false
+        }
+        ConfigAction::ToggleFollow => {
+            follow.enabled = !follow.enabled;
+            if follow.enabled {
+                follow.apply(viewer);
+            }
             false
         }
         ConfigAction::Quit => true,

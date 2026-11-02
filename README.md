@@ -79,6 +79,9 @@ To view a PDF file simply execute:
 $ meowpdf <PATH TO PDF FILE>
 ```
 
+#### Audio sync
+If `<name>.sync.json` exists next to `<name>.pdf` (or is given with `--sync <PATH>`), the viewer connects to the unix socket of the audio player named in that file (`<audio without extension>.sock`, in the same directory), retrying until it is available, and scrolls to the text being read. Scrolling manually pauses following until the audio is seeked or started again, or `f` is pressed. See `audio-sync-format.md` and `audio-sync-socket.md`.
+
 ### Configuration
 One of the key-features of *MeowPDF* is it's high customizability. *MeowPDF* allows customization based on the following parameters:
 - Scroll speed
@@ -110,6 +113,7 @@ The default keybindings are listed bellow:
 - **Ctrl+b/\<PageUp\>**: Jumps to the previous page
 - **Ctrl+f/\<PageDown\>**: Jumps to the next page
 - **/**: Open the table of contents (j/k or arrows to move, Enter to jump, Esc or / to close)
+- **f**: Toggle following of the audio player
 - **+**: Zoom in
 - **-**: Zoom out
 
@@ -128,6 +132,7 @@ The keybindings can be customized by modifying the `[bindings]` section in the c
 - `PrevPage`: Jumps to the previous page.
 - `NextPage`: Jumps to the next page.
 - `ToggleToc`: Opens the table of contents of the document.
+- `ToggleFollow`: Toggles following of the audio player.
 - `Quit`: Quits the document.
 
 > [!WARNING]
