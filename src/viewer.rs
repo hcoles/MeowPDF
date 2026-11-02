@@ -19,12 +19,13 @@ use crate::{
     CONFIG, TERMINAL_SIZE,
 };
 
-const MARKER_RGBA: [u8; 4] = [255, 60, 60, 255];
-const MARKER_ID_BASE: usize = 0x4000_0000;
-const MARKER_CACHE_MAX: usize = 16;
-/* Arrow size limits in pixels */
-const MARKER_MIN: i32 = 12;
-const MARKER_MAX: i32 = 40;
+/* Translucent yellow */
+const HIGHLIGHT_RGBA: [u8; 4] = [255, 220, 0, 45];
+/* `y` of a region is the baseline, so the highlight is moved down by this
+ * fraction of its height to cover descenders */
+const HIGHLIGHT_DESCENT: f32 = 0.2;
+const HIGHLIGHT_ID_BASE: usize = 0x4000_0000;
+const HIGHLIGHT_CACHE_MAX: usize = 16;
 
 #[derive(Clone, Copy, Debug)]
 pub struct DisplayRect {
@@ -134,9 +135,9 @@ pub struct Viewer {
     memory_used: usize,
     manual_move: bool,
 
-    marker: Option<Region>,
-    marker_images: HashMap<usize, usize>,
-    marker_next_id: usize,
+    highlight: Vec<Region>,
+    highlight_images: HashMap<(usize, usize), usize>,
+    highlight_next_id: usize,
 
     sender_rerender: Sender<()>,
 }
@@ -159,9 +160,9 @@ impl Viewer {
                 scheduled4render: HashMap::new(),
                 memory_used: 0,
                 manual_move: false,
-                marker: None,
-                marker_images: HashMap::new(),
-                marker_next_id: MARKER_ID_BASE,
+                highlight: Vec::new(),
+                highlight_images: HashMap::new(),
+                highlight_next_id: HIGHLIGHT_ID_BASE,
                 sender_rerender,
             },
             receiver_rerender,
@@ -234,9 +235,8 @@ impl Viewer {
     }
 
     /* Scrolls so that the region, given in PDF user space (origin bottom left),
-     * is about a third of the way down the terminal. The generator's `y` is the
-     * top edge of the region, not the bottom as `audio-sync-format.md` says. */
-    pub fn scroll_to_region(&mut self, page: usize, y: f32) {
+     * is about a third of the way down the terminal. `y` is its bottom edge. */
+    pub fn scroll_to_region(&mut self, page: usize, y: f32, height: f32) {
         let Ok(page_height) = self.page_height(page) else {
             return;
         };
@@ -248,105 +248,106 @@ impl Viewer {
         };
 
         let view_height = TERMINAL_SIZE.get().unwrap().read().unwrap().height as f32;
-        self.offset.1 = page_top + (page_height - y) - view_height / self.scale / 3.0;
+        self.offset.1 =
+            page_top + (page_height - (y + height)) - view_height / self.scale / 3.0;
         self.bound_viewer();
     }
 
-    /* The first region of the current cue; pages are one-indexed as in the sync file */
-    pub fn set_marker(&mut self, region: Option<Region>) {
-        self.marker = region;
+    /* The regions of the current cue; pages are one-indexed as in the sync file */
+    pub fn set_highlight(&mut self, regions: Vec<Region>) {
+        self.highlight = regions;
     }
 
-    /* A right pointing arrow in a square bitmap, transferred once per size */
-    fn marker_image(&mut self, size: usize) -> Option<usize> {
-        if let Some(id) = self.marker_images.get(&size) {
+    /* A solid translucent bitmap of the given size, transferred once per size */
+    fn highlight_image(&mut self, width: usize, height: usize) -> Option<usize> {
+        if let Some(id) = self.highlight_images.get(&(width, height)) {
             return Some(*id);
         }
 
-        if self.marker_images.len() >= MARKER_CACHE_MAX {
-            for id in self.marker_images.values() {
+        if self.highlight_images.len() >= HIGHLIGHT_CACHE_MAX {
+            for id in self.highlight_images.values() {
                 let _ = terminal_graphics_deallocate_id(*id);
             }
-            self.marker_images.clear();
+            self.highlight_images.clear();
         }
 
-        let mut data = vec![0u8; size * size * 4];
-        let half = size as f32 / 2.0;
-        for py in 0..size {
-            for px in 0..size {
-                /* The arrow narrows towards the tip on the right */
-                let reach = half * (1.0 - (px as f32 + 0.5) / size as f32);
-                if (py as f32 + 0.5 - half).abs() <= reach {
-                    let i = (py * size + px) * 4;
-                    data[i..i + 4].copy_from_slice(&MARKER_RGBA);
-                }
-            }
-        }
-
-        let id = self.marker_next_id;
-        terminal_graphics_transfer_bitmap(id, size, size, &data, true).ok()?;
-        self.marker_next_id += 1;
-        self.marker_images.insert(size, id);
+        let data = HIGHLIGHT_RGBA.repeat(width * height);
+        let id = self.highlight_next_id;
+        terminal_graphics_transfer_bitmap(id, width, height, &data, true).ok()?;
+        self.highlight_next_id += 1;
+        self.highlight_images.insert((width, height), id);
         Some(id)
     }
 
-    fn draw_marker(&mut self) {
-        let Some(r) = self.marker.clone() else {
+    fn draw_highlight(&mut self) {
+        if self.highlight.is_empty() {
             return;
-        };
+        }
 
-        let (term_height, pxpercol, pxperrow);
+        let (term_width, term_height, pxpercol, pxperrow);
         {
             let size = TERMINAL_SIZE.get().unwrap().read().unwrap();
+            term_width = size.width as i32;
             term_height = size.height as i32;
             pxpercol = size.width as f64 / size.columns as f64;
             pxperrow = size.height as f64 / size.rows as f64;
         }
         let margin = CONFIG.get().unwrap().viewer.margin_bottom;
 
-        let Some((page, rect)) = self
-            .calculate_display_bounds()
-            .into_iter()
-            .find(|(page, _)| *page + 1 == r.page)
-        else {
-            return;
-        };
-        let Ok(page_height) = self.page_height(page) else {
-            return;
-        };
-        let page_height = page_height - margin;
+        let mut placement = 0;
+        for (page, rect) in self.calculate_display_bounds() {
+            let Ok(page_height) = self.page_height(page) else {
+                continue;
+            };
+            let page_height = page_height - margin;
 
-        let line_top = rect.y as f32 + (page_height - r.y) * self.scale;
-        let line_height = r.height * self.scale;
-        let size = (line_height.round() as i32).clamp(MARKER_MIN, MARKER_MAX);
+            for r in self.highlight.clone().iter().filter(|r| r.page == page + 1) {
+                /* `y` is the bottom edge of the region */
+                let r = &Region {
+                    y: r.y - r.height * HIGHLIGHT_DESCENT,
+                    ..r.clone()
+                };
+                let left = (rect.x as f32 + r.x * self.scale).floor() as i32;
+                let top = (rect.y as f32 + (page_height - (r.y + r.height)) * self.scale)
+                    .floor() as i32;
+                let width = ((r.width * self.scale).ceil() as i32).max(1);
+                let height = ((r.height * self.scale).ceil() as i32).max(1);
 
-        let left = rect.x.max(0) + 2;
-        let top = (line_top + line_height / 2.0 - size as f32 / 2.0).round() as i32;
+                /* The part that is inside of the terminal */
+                let x0 = left.max(0);
+                let y0 = top.max(0);
+                let x1 = (left + width).min(term_width);
+                let y1 = (top + height).min(term_height);
+                if x0 >= x1 || y0 >= y1 {
+                    continue;
+                }
 
-        /* The part that is inside of the terminal */
-        let y0 = top.max(0);
-        let y1 = (top + size).min(term_height);
-        if y0 >= y1 {
-            return;
+                let Some(id) = self.highlight_image(width as usize, height as usize)
+                else {
+                    continue;
+                };
+
+                let col = (x0 as f64 / pxpercol).floor();
+                let row = (y0 as f64 / pxperrow).floor();
+                placement += 1;
+                let _ = terminal_graphics_display_overlay(
+                    id,
+                    placement,
+                    1 + col as usize,
+                    1 + row as usize,
+                    (
+                        (x0 as f64 - col * pxpercol) as usize,
+                        (y0 as f64 - row * pxperrow) as usize,
+                    ),
+                    (
+                        (x0 - left) as usize,
+                        (y0 - top) as usize,
+                        (x1 - x0) as usize,
+                        (y1 - y0) as usize,
+                    ),
+                );
+            }
         }
-
-        let Some(id) = self.marker_image(size as usize) else {
-            return;
-        };
-
-        let col = (left as f64 / pxpercol).floor();
-        let row = (y0 as f64 / pxperrow).floor();
-        let _ = terminal_graphics_display_overlay(
-            id,
-            1,
-            1 + col as usize,
-            1 + row as usize,
-            (
-                (left as f64 - col * pxpercol) as usize,
-                (y0 as f64 - row * pxperrow) as usize,
-            ),
-            (0, (y0 - top) as usize, size as usize, (y1 - y0) as usize),
-        );
     }
 
     pub fn scale(&mut self, scale: f32) {
@@ -766,7 +767,7 @@ impl Viewer {
             page_index += 1;
         }
 
-        self.draw_marker();
+        self.draw_highlight();
 
         Ok(displayed)
     }

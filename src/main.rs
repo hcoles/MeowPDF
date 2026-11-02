@@ -59,7 +59,7 @@ impl Follow {
             .and_then(|(d, c)| d.cues[c].regions.first());
         if let Some(r) = region {
             if r.page >= 1 {
-                viewer.scroll_to_region(r.page - 1, r.y);
+                viewer.scroll_to_region(r.page - 1, r.y, r.height);
             }
         }
     }
@@ -381,7 +381,7 @@ fn main() {
                 }
                 follow.cue = Some(cue);
                 if let Some(data) = &follow.data {
-                    viewer.set_marker(data.cues[cue].regions.first().cloned());
+                    viewer.set_highlight(data.cues[cue].regions.clone());
                 }
                 if resume {
                     follow.enabled = true;
