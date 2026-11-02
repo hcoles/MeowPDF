@@ -131,6 +131,35 @@ pub fn terminal_graphics_display_image(
     Ok(())
 }
 
+/* Places an image above the pages at its native size. `offset` is the pixel offset
+ * from the top left of the cell and `placement` distinguishes placements of the
+ * same image. Produces no response from the terminal. */
+pub fn terminal_graphics_display_overlay(
+    id: usize,
+    placement: usize,
+    col: usize,
+    row: usize,
+    offset: (usize, usize),
+    rect: (usize, usize, usize, usize),
+) -> Result<(), String> {
+    let mut handle = stdout().lock();
+
+    write!(handle, "\x1B[s\x1B[{};{}H", row, col).unwrap();
+    write!(
+        handle,
+        "\x1B_Gq=2,z=-1073741824,a=p,C=1,i={},p={},X={},Y={},x={},y={},w={},h={};\x1B\\",
+        id, placement, offset.0, offset.1, rect.0, rect.1, rect.2, rect.3
+    )
+    .unwrap();
+    handle.write_all(b"\x1B[u").unwrap();
+
+    handle
+        .flush()
+        .map_err(|x: std::io::Error| format!("Could not flush stdout: {}", x))?;
+
+    Ok(())
+}
+
 /* A structure which extracts the Kitty graphics response in a lazy way */
 #[derive(Debug, Clone)]
 pub struct GraphicsResponse {

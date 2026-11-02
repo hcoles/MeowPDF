@@ -59,7 +59,7 @@ impl Follow {
             .and_then(|(d, c)| d.cues[c].regions.first());
         if let Some(r) = region {
             if r.page >= 1 {
-                viewer.scroll_to_region(r.page - 1, r.y, r.height);
+                viewer.scroll_to_region(r.page - 1, r.y);
             }
         }
     }
@@ -240,7 +240,12 @@ fn main() {
         /* Audio position updates */
         sel.recv(&sync_updates);
 
-        let index_ready = sel.ready();
+        /* Audio position updates must not starve behind a stream of other events */
+        let index_ready = if sync_updates.is_empty() {
+            sel.ready()
+        } else {
+            7
+        };
 
         /* Mouse movement must not trigger a redraw of the table of contents */
         if toc.open && index_ready == 5 {
@@ -363,10 +368,21 @@ fn main() {
                 viewer.resize(old_width);
             }
             7 => {
-                let SyncUpdate { cue, resume } = sync_updates
+                let SyncUpdate {
+                    mut cue,
+                    mut resume,
+                } = sync_updates
                     .try_recv()
                     .expect("Could not receive audio sync update");
+                /* Only the latest position matters */
+                while let Ok(next) = sync_updates.try_recv() {
+                    cue = next.cue;
+                    resume |= next.resume;
+                }
                 follow.cue = Some(cue);
+                if let Some(data) = &follow.data {
+                    viewer.set_marker(data.cues[cue].regions.first().cloned());
+                }
                 if resume {
                     follow.enabled = true;
                 }

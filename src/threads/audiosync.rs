@@ -17,7 +17,7 @@ const RECONNECT_DELAY: Duration = Duration::from_millis(1500);
 /* A change of position larger than this is considered a seek */
 const SEEK_THRESHOLD: f64 = 1.0;
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Region {
     pub page: usize,
     pub y: f32,
