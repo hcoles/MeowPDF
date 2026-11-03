@@ -20,7 +20,8 @@ use crate::{
 };
 
 /* Translucent yellow */
-const HIGHLIGHT_RGBA: [u8; 4] = [255, 220, 0, 45];
+const HIGHLIGHT_RGBA: [u8; 4] = [255, 170, 0, 120];
+const HIGHLIGHT_BORDER: usize = 2;
 /* `y` of a region is the baseline, so the highlight is moved down by this
  * fraction of its height to cover descenders */
 const HIGHLIGHT_DESCENT: f32 = 0.2;
@@ -258,7 +259,7 @@ impl Viewer {
         self.highlight = regions;
     }
 
-    /* A solid translucent bitmap of the given size, transferred once per size */
+    /* A transparent bitmap with a thin underline of the given size, transferred once per size */
     fn highlight_image(&mut self, width: usize, height: usize) -> Option<usize> {
         if let Some(id) = self.highlight_images.get(&(width, height)) {
             return Some(*id);
@@ -271,7 +272,15 @@ impl Viewer {
             self.highlight_images.clear();
         }
 
-        let data = HIGHLIGHT_RGBA.repeat(width * height);
+        let mut data = vec![0u8; width * height * 4];
+        for y in 0..height {
+            for x in 0..width {
+                if y + HIGHLIGHT_BORDER >= height {
+                    let i = (y * width + x) * 4;
+                    data[i..i + 4].copy_from_slice(&HIGHLIGHT_RGBA);
+                }
+            }
+        }
         let id = self.highlight_next_id;
         terminal_graphics_transfer_bitmap(id, width, height, &data, true).ok()?;
         self.highlight_next_id += 1;
