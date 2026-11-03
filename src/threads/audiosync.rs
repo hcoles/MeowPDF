@@ -8,6 +8,7 @@ use std::{
 };
 
 use crossbeam_channel::{unbounded, Receiver};
+use mupdf::{pdf::PdfDocument, pdf::PdfObject};
 use serde::Deserialize;
 
 use crate::RUNNING;
@@ -59,13 +60,65 @@ struct Message {
     state: String,
 }
 
+const ATTACHMENT_NAME: &str = "sync.json";
+
+/* Finds the stream of the embedded file called `sync.json` in a name tree */
+fn find_attachment(node: &PdfObject, depth: usize) -> Option<PdfObject> {
+    if depth > 16 {
+        return None;
+    }
+
+    if let Ok(Some(names)) = node.get_dict("Names") {
+        let len = names.len().unwrap_or(0);
+        for i in (0..len).step_by(2) {
+            let Ok(Some(key)) = names.get_array(i as i32) else {
+                continue;
+            };
+            if key.as_string().ok() != Some(ATTACHMENT_NAME) {
+                continue;
+            }
+            let Ok(Some(spec)) = names.get_array(i as i32 + 1) else {
+                continue;
+            };
+            let spec = spec.resolve().ok().flatten().unwrap_or(spec);
+            let files = spec.get_dict("EF").ok().flatten()?;
+            return files
+                .get_dict("F")
+                .ok()
+                .flatten()
+                .or_else(|| files.get_dict("UF").ok().flatten());
+        }
+    }
+
+    if let Ok(Some(kids)) = node.get_dict("Kids") {
+        for i in 0..kids.len().unwrap_or(0) {
+            if let Ok(Some(kid)) = kids.get_array(i as i32) {
+                if let Some(found) = find_attachment(&kid, depth + 1) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+    None
+}
+
 impl SyncData {
-    /* Returns `Ok(None)` if the file has an unknown version */
+    /* Reads the `sync.json` attachment of the PDF. Returns `Ok(None)` if the PDF has
+     * no such attachment or the version is unknown. */
     pub fn load(path: &Path) -> Result<Option<Self>, String> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| format!("Could not read {}: {}", path.display(), e))?;
-        let file: SyncFile = serde_json::from_str(&content)
-            .map_err(|e| format!("Could not parse {}: {}", path.display(), e))?;
+        let pdf_err = |e: mupdf::Error| format!("Could not read {}: {}", path.display(), e);
+        let doc = PdfDocument::open(path.to_str().ok_or("Invalid PDF path")?).map_err(pdf_err)?;
+        let root = doc.catalog().map_err(pdf_err)?;
+        let tree = root
+            .get_dict("Names")
+            .and_then(|n| n.map_or(Ok(None), |n| n.get_dict("EmbeddedFiles")))
+            .map_err(pdf_err)?;
+        let Some(stream) = tree.and_then(|t| find_attachment(&t, 0)) else {
+            return Ok(None);
+        };
+        let content = stream.read_stream().map_err(pdf_err)?;
+        let file: SyncFile = serde_json::from_slice(&content)
+            .map_err(|e| format!("Could not parse sync.json in {}: {}", path.display(), e))?;
 
         if file.version != SUPPORTED_VERSION {
             return Ok(None);

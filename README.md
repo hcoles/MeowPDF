@@ -80,7 +80,7 @@ $ meowpdf <PATH TO PDF FILE>
 ```
 
 #### Audio sync
-If `<name>.sync.json` exists next to `<name>.pdf` (or is given with `--sync <PATH>`), the viewer connects to the unix socket of the audio player named in that file (`<audio without extension>.sock`, in the same directory), retrying until it is available, scrolls to the text being read and underlines it. Scrolling manually pauses following until the audio is seeked or started again, or `f` is pressed. See `audio-sync-format.md` and `audio-sync-socket.md`.
+If the PDF has an embedded `sync.json` attachment, the viewer connects to the unix socket of the audio player named in that file (`<audio without extension>.sock`, in the same directory), retrying until it is available, scrolls to the text being read and underlines it. Scrolling manually pauses following until the audio is seeked or started again, or `f` is pressed. See `audio-sync-format.md` and `audio-sync-socket.md`.
 
 ### Configuration
 One of the key-features of *MeowPDF* is it's high customizability. *MeowPDF* allows customization based on the following parameters:

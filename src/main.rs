@@ -65,30 +65,9 @@ impl Follow {
     }
 }
 
-/* Finds the sync file from the arguments or next to the PDF */
+/* Reads the audio sync data embedded in the PDF, if any */
 fn load_sync(pdf: &str) -> Result<Option<Arc<SyncData>>, String> {
-    let args: Vec<String> = std::env::args().skip(2).collect();
-    let explicit = match args.iter().position(|a| a == "--sync") {
-        Some(i) => Some(args.get(i + 1).ok_or("--sync requires a path")?.to_owned()),
-        None => None,
-    };
-
-    let path = match &explicit {
-        Some(p) => Path::new(p).to_owned(),
-        None => {
-            let p = Path::new(pdf).with_extension("sync.json");
-            if !p.is_file() {
-                return Ok(None);
-            }
-            p
-        }
-    };
-
-    match SyncData::load(&path)? {
-        Some(data) => Ok(Some(Arc::new(data))),
-        None if explicit.is_some() => Err("Unknown audio sync file version".to_owned()),
-        None => Ok(None),
-    }
+    Ok(SyncData::load(Path::new(pdf))?.map(Arc::new))
 }
 
 struct LastExecuted {
